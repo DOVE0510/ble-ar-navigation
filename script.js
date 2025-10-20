@@ -1,45 +1,60 @@
-// Beacon positions (in meters)
-const beacons = {
-  "d9:f3:ed:e0:46:2f": { pos: 0.0 },
-  "da:af:6d:87:ed:91": { pos: 0.9 },
-  "e5:d3:5c:26:5c:63": { pos: 1.8 }
+// ========== Firebase Imports ==========
+import { initializeApp } from "https://www.gstatic.com/firebasejs/11.0.0/firebase-app.js";
+import { getDatabase, ref, onValue } from "https://www.gstatic.com/firebasejs/11.0.0/firebase-database.js";
+
+// ========== Firebase Config ==========
+const firebaseConfig = {
+  apiKey: "AIzaSyCDEs8PV9DCwSX08p9qveSXbZeEshNXY9Y",
+  authDomain: "ble-navigation-dda3d.firebaseapp.com",
+  databaseURL: "https://ble-navigation-dda3d-default-rtdb.firebaseio.com",
+  projectId: "ble-navigation-dda3d",
+  storageBucket: "ble-navigation-dda3d.appspot.com",
+  messagingSenderId: "163668554147",
+  appId: "1:163668554147:web:2c75ddcb62d1dcee1191d6",
+  measurementId: "G-R9HSWK2L8"
 };
 
-const video = document.getElementById("camera");
+const app = initializeApp(firebaseConfig);
+const db = getDatabase(app);
+
+// ========== Globals ==========
+let beacons = {};  // will load from Firebase
 const canvas = document.getElementById("overlay");
 const ctx = canvas.getContext("2d");
 const label = document.getElementById("posLabel");
 canvas.width = window.innerWidth;
 canvas.height = window.innerHeight;
 
-// Start camera
+// ========== Start Camera ==========
 async function startCamera() {
   const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment" } });
-  video.srcObject = stream;
+  document.getElementById("camera").srcObject = stream;
 }
 
-// Convert RSSI to distance
+// ========== RSSI → Distance ==========
 function rssiToDistance(rssi) {
   const txPower = -59, n = 2.2;
   return Math.pow(10, (txPower - rssi) / (10 * n));
 }
 
-// Draw red dot
+// ========== Draw Red Dot ==========
 function drawDot(x) {
   ctx.clearRect(0, 0, canvas.width, canvas.height);
-  const posX = (x / 1.8) * canvas.width;
+  const posX = (x / getMaxBeaconPos()) * canvas.width;
   const posY = canvas.height * 0.75;
   ctx.beginPath();
   ctx.arc(posX, posY, 20, 0, 2 * Math.PI);
   ctx.fillStyle = "rgba(255,0,0,0.8)";
+  ctx.shadowColor = "red";
+  ctx.shadowBlur = 15;
   ctx.fill();
 }
 
-// Compute position
-function estimatePosition(data) {
+// ========== Weighted Position Estimate ==========
+function estimatePosition(beaconData) {
   let num = 0, den = 0;
-  for (const mac in data) {
-    const d = data[mac].distance;
+  for (const mac in beaconData) {
+    const d = beaconData[mac].distance;
     const pos = beacons[mac].pos;
     const w = 1 / (d * d + 0.0001);
     num += w * pos;
@@ -48,11 +63,20 @@ function estimatePosition(data) {
   return num / den;
 }
 
-// Start scanning
-async function startScanning() {
-  document.getElementById("startButton").style.display = "none";
-  await startCamera();
+// ========== Utility ==========
+function getMaxBeaconPos() {
+  return Math.max(...Object.values(beacons).map(b => b.pos || 0));
+}
 
+// ========== Load Beacon Positions from Firebase ==========
+const beaconsRef = ref(db, "beacons");
+onValue(beaconsRef, (snapshot) => {
+  beacons = snapshot.val() || {};
+  console.log("📡 Beacons loaded:", beacons);
+});
+
+// ========== BLE Scanning (Web Bluetooth) ==========
+async function startBLEScan() {
   try {
     const scan = await navigator.bluetooth.requestLEScan({
       acceptAllAdvertisements: true,
@@ -74,9 +98,14 @@ async function startScanning() {
       }
     });
   } catch (err) {
-    alert("Bluetooth permission denied or unsupported.");
+    alert("Bluetooth permission denied or not supported on this device/browser.");
     console.error(err);
   }
 }
 
-document.getElementById("startButton").onclick = startScanning;
+// ========== Start Everything ==========
+document.getElementById("startButton").onclick = async () => {
+  document.getElementById("startButton").style.display = "none";
+  await startCamera();
+  startBLEScan();
+};
